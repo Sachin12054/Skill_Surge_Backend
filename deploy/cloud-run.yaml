@@ -1,0 +1,73 @@
+# Google Cloud Run Service Configuration
+# Auto-scales to 0 instances (pay only when processing requests)
+# Deploy with: gcloud run services replace cloud-run.yaml
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: syllabus-ai-backend
+  labels:
+    cloud.googleapis.com/location: us-central1
+spec:
+  template:
+    metadata:
+      annotations:
+        # Auto-scale to 0 when no requests
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "10"
+        # Increase timeout for ML processing
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      containers:
+      - image: gcr.io/YOUR_PROJECT_ID/syllabus-ai-backend:latest
+        ports:
+        - name: http1
+          containerPort: 8000
+        env:
+        - name: APP_VERSION
+          value: "1.0.0"
+        - name: DEBUG
+          value: "false"
+        - name: TRANSFORMERS_CACHE
+          value: /app/models
+        - name: HF_HOME
+          value: /app/models
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openai-api-key
+              key: latest
+        - name: SUPABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: supabase-url
+              key: latest
+        - name: SUPABASE_SERVICE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: supabase-service-key
+              key: latest
+        - name: SARVAM_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: sarvam-api-key
+              key: latest
+        resources:
+          limits:
+            cpu: "2"
+            memory: 1Gi
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 30
+          failureThreshold: 3

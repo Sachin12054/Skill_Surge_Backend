@@ -5,10 +5,10 @@ FROM python:3.11-slim as model-downloader
 WORKDIR /models
 
 # Install minimal dependencies for model download
-RUN pip install --no-cache-dir torch sentence-transformers
+RUN python3 -m pip install --no-cache-dir torch sentence-transformers
 
 # Pre-download the model
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2', cache_folder='/models')"
+RUN python3 -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2', cache_folder='/models')"
 
 # Stage 2: Production runtime
 FROM python:3.11-slim
@@ -28,7 +28,8 @@ COPY requirements.txt .
 
 # Install Python dependencies globally (not in user directory)
 ENV PIP_USER=0
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python3 -m pip install --upgrade pip && \
+    python3 -m pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
@@ -44,7 +45,7 @@ EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
+    CMD python3 -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
 
 # Run with uvicorn using python -m to avoid path issues
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -6,7 +6,7 @@ import requests
 import json
 import time
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "https://skill-surge-backend-1.onrender.com"
 
 def test_pass(name):
     print(f"✅ {name}")

@@ -41,19 +41,30 @@ class VisionService:
         self._token_expiry: float = 0
         
         # Load service account credentials
-        creds_path = Path(self.settings.GOOGLE_APPLICATION_CREDENTIALS)
-        if not creds_path.is_absolute():
-            # Resolve relative to backend directory
-            creds_path = Path(__file__).parent.parent.parent / creds_path
-        
-        if not creds_path.exists():
-            raise FileNotFoundError(
-                f"Service account file not found: {creds_path}. "
-                "Place your GCP service account JSON in backend/credentials/"
-            )
-        
-        with open(creds_path) as f:
-            self._credentials = json.load(f)
+        # Priority: env var GCP_SERVICE_ACCOUNT_JSON > Render secret file > local file path
+        if self.settings.GCP_SERVICE_ACCOUNT_JSON:
+            try:
+                self._credentials = json.loads(self.settings.GCP_SERVICE_ACCOUNT_JSON)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON in GCP_SERVICE_ACCOUNT_JSON env var: {e}")
+        else:
+            # Check Render secret file path first, then local path
+            render_secret_path = Path("/etc/secrets/gcp-service-account.json")
+            creds_path = Path(self.settings.GOOGLE_APPLICATION_CREDENTIALS)
+            if not creds_path.is_absolute():
+                creds_path = Path(__file__).parent.parent.parent / creds_path
+            
+            if render_secret_path.exists():
+                creds_path = render_secret_path
+            
+            if not creds_path.exists():
+                raise FileNotFoundError(
+                    f"Service account file not found: {creds_path}. "
+                    "Upload gcp-service-account.json as a Render Secret File or place it in backend/credentials/"
+                )
+            
+            with open(creds_path) as f:
+                self._credentials = json.load(f)
     
     async def _get_access_token(self) -> str:
         """Get OAuth2 access token from service account using JWT."""

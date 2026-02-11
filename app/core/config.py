@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     
     # Google Cloud Vision API
     GOOGLE_APPLICATION_CREDENTIALS: str = "credentials/gcp-service-account.json"
+    GCP_SERVICE_ACCOUNT_JSON: Optional[str] = None  # JSON string from env var (for cloud deploys)
     
     # Processing
     MAX_PDF_SIZE_MB: int = 50

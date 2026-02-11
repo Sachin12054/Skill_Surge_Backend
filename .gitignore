@@ -44,9 +44,14 @@ Thumbs.db
 *.log
 logs/
 
-# Models cache
-models/
+# Models cache (ML models, not app/models folder)
+*.pt
+*.pth
+*.onnx
+*.h5
+*.pkl
 .cache/
+sentence_transformers_cache/
 
 # Testing
 .pytest_cache/

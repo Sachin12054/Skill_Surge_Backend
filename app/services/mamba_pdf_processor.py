@@ -1,14 +1,14 @@
 """
 Mamba-Enhanced PDF Processor
-Uses Mamba state-space model for intelligent text extraction and understanding.
+Uses intelligent heuristic-based text extraction and understanding.
+Optimized for low-memory environments (no local ML models).
 """
 
 import fitz  # PyMuPDF
 from typing import List, Dict, Any, Tuple, Optional
 import re
 from dataclasses import dataclass
-import torch
-from transformers import AutoTokenizer, AutoModel
+import math
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,83 +22,27 @@ class TextChunk:
     start_pos: int
     end_pos: int
     metadata: Dict[str, Any]
-    embeddings: Optional[torch.Tensor] = None
     importance_score: float = 0.0
 
 
-# Model cache directory
-MODEL_CACHE_DIR = "/app/models"  # Use persistent volume in production
-
-
 class MambaPDFProcessor:
-    """Enhanced PDF processor using Mamba state-space model for intelligent extraction."""
+    """Enhanced PDF processor using intelligent heuristic extraction.
     
-    # Class-level model cache (singleton pattern)
-    _model_cache = None
-    _model_loaded = False
+    Provides the same API as before but without heavy ML model dependencies.
+    Text ranking uses TF-IDF-like heuristics instead of sentence-transformers.
+    """
     
     def __init__(
         self, 
         chunk_size: int = 1000, 
         chunk_overlap: int = 200,
         use_mamba: bool = True,
-        model_cache_dir: str = MODEL_CACHE_DIR
+        model_cache_dir: str = "/app/models"
     ):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.use_mamba = use_mamba
-        self.model_cache_dir = model_cache_dir
-        
-        # Initialize Mamba model if enabled
-        if self.use_mamba:
-            try:
-                self._init_mamba()
-            except Exception as e:
-                logger.warning(f"Failed to initialize Mamba: {e}. Falling back to basic extraction.")
-                self.use_mamba = False
-    
-    def _init_mamba(self):
-        """Initialize Mamba model for intelligent text processing with caching."""
-        try:
-            # Check if model is already loaded in class cache
-            if MambaPDFProcessor._model_loaded and MambaPDFProcessor._model_cache is not None:
-                self.model = MambaPDFProcessor._model_cache
-                self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-                logger.info("Reusing cached Mamba model")
-                return
-            
-            # Use a lightweight transformer for text understanding
-            # Note: Full Mamba-SSM requires specific model architecture
-            # For production, use: state-spaces/mamba-130m or similar
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            logger.info(f"Using device: {self.device}")
-            
-            # Create cache directory if it doesn't exist
-            import os
-            os.makedirs(self.model_cache_dir, exist_ok=True)
-            
-            # For now, use sentence transformers with local caching
-            # This will be replaced with actual Mamba model in production
-            from sentence_transformers import SentenceTransformer
-            
-            logger.info(f"Loading model from cache: {self.model_cache_dir}")
-            self.model = SentenceTransformer(
-                'all-MiniLM-L6-v2', 
-                device=self.device,
-                cache_folder=self.model_cache_dir
-            )
-            
-            # Cache the model at class level
-            MambaPDFProcessor._model_cache = self.model
-            MambaPDFProcessor._model_loaded = True
-            
-            logger.info("Mamba-based text processor initialized and cached successfully")
-        except ImportError:
-            logger.warning("sentence-transformers not installed. Install with: pip install sentence-transformers")
-            raise
-        except Exception as e:
-            logger.error(f"Error initializing Mamba processor: {e}")
-            raise
+        logger.info("PDF processor initialized (lightweight mode)")
     
     async def extract_text(self, pdf_bytes: bytes) -> str:
         """Extract all text from a PDF with intelligent processing."""
@@ -106,7 +50,6 @@ class MambaPDFProcessor:
         if not isinstance(pdf_bytes, bytes):
             logger.error(f"extract_text received non-bytes: {type(pdf_bytes)}")
             if isinstance(pdf_bytes, str):
-                # Try to recover by encoding
                 logger.warning("Attempting to convert string to bytes")
                 pdf_bytes = pdf_bytes.encode('latin-1')
             else:
@@ -116,10 +59,8 @@ class MambaPDFProcessor:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         
         if self.use_mamba:
-            # Intelligent extraction: prioritize main content
             text = await self._extract_with_mamba(doc)
         else:
-            # Basic extraction
             text = ""
             for page in doc:
                 text += page.get_text()
@@ -129,23 +70,20 @@ class MambaPDFProcessor:
     
     async def _extract_with_mamba(self, doc: fitz.Document) -> str:
         """
-        Use Mamba-style state-space processing for intelligent extraction.
+        Use heuristic-based processing for intelligent extraction.
         Filters headers, footers, page numbers, and focuses on main content.
         """
         all_blocks = []
         
         for page_num, page in enumerate(doc):
-            # Get text blocks with position information
             blocks = page.get_text("blocks")
             
             for block in blocks:
                 x0, y0, x1, y1, text, block_no, block_type = block
                 
-                # Skip small text blocks (likely headers/footers)
                 if len(text.strip()) < 10:
                     continue
                 
-                # Skip blocks at page edges (headers/footers)
                 page_height = page.rect.height
                 if y0 < 50 or y1 > page_height - 50:
                     continue
@@ -157,31 +95,34 @@ class MambaPDFProcessor:
                     'size': len(text)
                 })
         
-        # Rank blocks by importance using Mamba (embeddings-based)
         if all_blocks and self.use_mamba:
-            all_blocks = await self._rank_blocks_by_importance(all_blocks)
+            all_blocks = self._rank_blocks_by_importance(all_blocks)
         
-        # Concatenate in order
         return " ".join(block['text'] for block in all_blocks)
     
-    async def _rank_blocks_by_importance(self, blocks: List[Dict]) -> List[Dict]:
-        """Use Mamba to rank text blocks by semantic importance."""
+    def _rank_blocks_by_importance(self, blocks: List[Dict]) -> List[Dict]:
+        """Rank text blocks by importance using text heuristics (no ML model needed)."""
         try:
-            texts = [block['text'] for block in blocks]
+            for block in blocks:
+                text = block['text']
+                score = 0.0
+                # Longer blocks are typically more important
+                score += min(len(text) / 500.0, 1.0) * 0.3
+                # Blocks with more unique words score higher
+                words = set(text.lower().split())
+                score += min(len(words) / 50.0, 1.0) * 0.3
+                # Blocks with numbers/data
+                if re.search(r'\d+\.?\d*', text):
+                    score += 0.1
+                # Blocks with academic indicators
+                if any(w in text.lower() for w in ['result', 'method', 'conclusion', 'abstract', 'hypothesis', 'study', 'analysis']):
+                    score += 0.2
+                # Penalize very short blocks
+                if len(text.strip()) < 30:
+                    score -= 0.3
+                block['importance'] = max(0.0, score)
             
-            # Get embeddings for all blocks
-            embeddings = self.model.encode(texts, convert_to_tensor=True)
-            
-            # Calculate importance based on semantic density
-            # Blocks with richer semantic content get higher scores
-            norms = torch.norm(embeddings, dim=1)
-            
-            for i, block in enumerate(blocks):
-                block['importance'] = norms[i].item()
-            
-            # Sort by page first, then by importance within page
             blocks.sort(key=lambda x: (x['page'], -x.get('importance', 0)))
-            
             return blocks
         except Exception as e:
             logger.warning(f"Error ranking blocks: {e}. Returning original order.")
@@ -194,15 +135,12 @@ class MambaPDFProcessor:
         
         for i, page in enumerate(doc):
             if self.use_mamba:
-                # Extract main content only
                 blocks = page.get_text("blocks")
                 page_height = page.rect.height
                 
                 main_content = []
                 for block in blocks:
                     x0, y0, x1, y1, text, _, _ = block
-                    
-                    # Filter headers/footers
                     if len(text.strip()) > 10 and 50 < y0 < page_height - 50:
                         main_content.append(text)
                 
@@ -218,11 +156,7 @@ class MambaPDFProcessor:
     async def chunk_text(self, text: str) -> List[TextChunk]:
         """Split text into intelligent, semantically-aware chunks."""
         chunks = []
-        
-        # Clean text
         text = self._clean_text(text)
-        
-        # Split into sentences
         sentences = self._split_sentences(text)
         
         current_chunk = ""
@@ -240,21 +174,13 @@ class MambaPDFProcessor:
                         metadata={}
                     )
                     
-                    # Add embeddings if Mamba is enabled
                     if self.use_mamba:
-                        try:
-                            embedding = self.model.encode(chunk.text, convert_to_tensor=True)
-                            chunk.embeddings = embedding
-                            chunk.importance_score = torch.norm(embedding).item()
-                        except Exception as e:
-                            logger.warning(f"Error generating embeddings: {e}")
+                        chunk.importance_score = self._compute_importance(chunk.text)
                     
                     chunks.append(chunk)
                 
-                # Smart overlap: find sentence boundary
                 overlap_start = max(0, len(current_chunk) - self.chunk_overlap)
                 overlap_text = current_chunk[overlap_start:]
-                
                 current_chunk = overlap_text + sentence
                 chunk_start = current_start - len(overlap_text)
             else:
@@ -262,7 +188,6 @@ class MambaPDFProcessor:
             
             current_start += len(sentence)
         
-        # Add last chunk
         if current_chunk.strip():
             chunk = TextChunk(
                 text=current_chunk.strip(),
@@ -271,57 +196,58 @@ class MambaPDFProcessor:
                 end_pos=current_start,
                 metadata={}
             )
-            
             if self.use_mamba:
-                try:
-                    embedding = self.model.encode(chunk.text, convert_to_tensor=True)
-                    chunk.embeddings = embedding
-                    chunk.importance_score = torch.norm(embedding).item()
-                except:
-                    pass
-            
+                chunk.importance_score = self._compute_importance(chunk.text)
             chunks.append(chunk)
         
         return chunks
     
+    def _compute_importance(self, text: str) -> float:
+        """Compute importance score using text heuristics."""
+        words = text.lower().split()
+        if not words:
+            return 0.0
+        unique_ratio = len(set(words)) / len(words)
+        length_score = min(len(text) / 500.0, 1.0)
+        return (unique_ratio * 0.5 + length_score * 0.5)
+    
     async def extract_key_concepts(self, pdf_bytes: bytes, top_k: int = 10) -> List[str]:
         """
-        Extract key concepts from PDF using Mamba's understanding.
+        Extract key concepts from PDF using text analysis.
         Returns the most important concepts/terms.
         """
-        if not self.use_mamba:
-            return []
+        if isinstance(pdf_bytes, str):
+            text = pdf_bytes
+        else:
+            text = await self.extract_text(pdf_bytes)
         
-        text = await self.extract_text(pdf_bytes)
-        
-        # Split into sentences
         sentences = self._split_sentences(text)
-        
         if not sentences:
             return []
         
         try:
-            # Get embeddings for all sentences
-            embeddings = self.model.encode(sentences[:100], convert_to_tensor=True)  # Limit for speed
+            # TF-IDF-like heuristic: find important words
+            from collections import Counter
+            all_words = []
+            for s in sentences[:100]:
+                words = re.findall(r'\b[A-Za-z]{4,}\b', s)
+                all_words.extend([w.lower() for w in words])
             
-            # Calculate importance scores
-            norms = torch.norm(embeddings, dim=1)
+            word_counts = Counter(all_words)
+            # Remove very common words
+            stopwords = {'with', 'that', 'this', 'from', 'have', 'been', 'were', 'will',
+                         'they', 'their', 'which', 'would', 'could', 'should', 'about',
+                         'also', 'more', 'than', 'some', 'into', 'other', 'these', 'most',
+                         'such', 'when', 'what', 'each', 'make', 'like', 'does', 'made',
+                         'after', 'before', 'between', 'through', 'over', 'under', 'only'}
+            for sw in stopwords:
+                word_counts.pop(sw, None)
             
-            # Get top-k most important sentences
-            top_indices = torch.argsort(norms, descending=True)[:top_k]
+            # Score by frequency * length (longer technical terms are more important)
+            scored = [(word, count * math.log(len(word))) for word, count in word_counts.items()]
+            scored.sort(key=lambda x: x[1], reverse=True)
             
-            key_sentences = [sentences[i] for i in top_indices.cpu().numpy()]
-            
-            # Extract noun phrases as concepts (simplified)
-            concepts = []
-            for sentence in key_sentences:
-                words = sentence.split()
-                # Simple heuristic: capitalized words or longer words
-                concepts.extend([w.strip('.,!?') for w in words if len(w) > 5 or w[0].isupper()])
-            
-            # Remove duplicates and return
-            return list(dict.fromkeys(concepts))[:top_k]
-        
+            return [word for word, score in scored[:top_k]]
         except Exception as e:
             logger.error(f"Error extracting concepts: {e}")
             return []
@@ -371,30 +297,19 @@ class MambaPDFProcessor:
     
     def _clean_text(self, text: str) -> str:
         """Clean and normalize text."""
-        # Remove excessive whitespace
         text = re.sub(r'\s+', ' ', text)
-        
-        # Remove page numbers
         text = re.sub(r'\n\d+\n', '\n', text)
-        
-        # Remove common header/footer patterns
         text = re.sub(r'Page \d+ of \d+', '', text)
-        
-        # Normalize quotes
-        text = text.replace('"', '"').replace('"', '"')
-        text = text.replace(''', "'").replace(''', "'")
-        
+        text = text.replace('\u201c', '"').replace('\u201d', '"')
+        text = text.replace('\u2018', "'").replace('\u2019', "'")
         return text.strip()
     
     def _split_sentences(self, text: str) -> List[str]:
         """Split text into sentences intelligently."""
-        # Handle common abbreviations
         text = text.replace('Dr.', 'Dr')
         text = text.replace('Mr.', 'Mr')
         text = text.replace('Mrs.', 'Mrs')
         text = text.replace('etc.', 'etc')
-        
-        # Split on sentence boundaries
         sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', text)
         return [s.strip() + ' ' for s in sentences if s.strip()]
 

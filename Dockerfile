@@ -1,39 +1,28 @@
-# Build stage
-FROM python:3.11-slim as builder
-
-WORKDIR /app
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir --user -r requirements.txt
-
-# Production stage
+# Lightweight build for Render (512MB limit)
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy installed packages from builder
-COPY --from=builder /root/.local /root/.local
-
-# Make sure scripts in .local are usable
-ENV PATH=/root/.local/bin:$PATH
-
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+# Install minimal runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libmagic1 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# Copy application code
+# Copy requirements and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt \
+    && find /usr/local -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; true \
+    && find /usr/local -type d -name tests -exec rm -rf {} + 2>/dev/null; true \
+    && find /usr/local -type d -name test -exec rm -rf {} + 2>/dev/null; true \
+    && rm -rf /root/.cache/pip
+
+# Copy only application code (not tests, docs, etc.)
 COPY ./app ./app
 
 # Create non-root user
-RUN useradd --create-home --shell /bin/bash appuser
-RUN chown -R appuser:appuser /app
+RUN useradd --create-home --shell /bin/bash appuser \
+    && chown -R appuser:appuser /app
 USER appuser
 
 # Expose port
@@ -43,5 +32,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
-# Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run with minimal workers to save memory
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--limit-max-requests", "1000"]

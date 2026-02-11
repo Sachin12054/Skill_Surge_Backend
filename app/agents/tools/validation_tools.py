@@ -25,9 +25,7 @@ def execute_python_code(code: str) -> Dict[str, Any]:
     try:
         import sys
         from io import StringIO
-        import numpy as np
-        import pandas as pd
-        from scipy import stats
+        import math
         
         # Capture stdout
         old_stdout = sys.stdout
@@ -35,9 +33,7 @@ def execute_python_code(code: str) -> Dict[str, Any]:
         
         # Create safe execution environment
         safe_globals = {
-            'np': np,
-            'pd': pd,
-            'stats': stats,
+            'math': math,
             '__builtins__': {
                 'print': print,
                 'len': len,

@@ -8,7 +8,7 @@ import uuid
 import json
 import random
 import boto3
-import numpy as np
+import math
 from openai import OpenAI
 from app.core.config import get_settings
 
@@ -84,11 +84,14 @@ def calculate_semantic_similarity(text1: str, text2: str, threshold: float = 0.8
         )
         
         # Extract embeddings
-        embedding1 = np.array(response.data[0].embedding)
-        embedding2 = np.array(response.data[1].embedding)
+        embedding1 = response.data[0].embedding
+        embedding2 = response.data[1].embedding
         
-        # Calculate cosine similarity
-        similarity = np.dot(embedding1, embedding2) / (np.linalg.norm(embedding1) * np.linalg.norm(embedding2))
+        # Calculate cosine similarity (pure Python, no numpy needed)
+        dot_product = sum(a * b for a, b in zip(embedding1, embedding2))
+        norm1 = math.sqrt(sum(a * a for a in embedding1))
+        norm2 = math.sqrt(sum(b * b for b in embedding2))
+        similarity = dot_product / (norm1 * norm2) if norm1 and norm2 else 0.0
         
         return similarity >= threshold, float(similarity)
     except Exception as e:

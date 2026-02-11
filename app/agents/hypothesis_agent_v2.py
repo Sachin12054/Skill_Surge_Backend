@@ -545,7 +545,7 @@ class HypothesisLabAgent:
     async def extract_from_pdf(self, pdf_bytes: bytes, title: str = "Unknown") -> Dict[str, Any]:
         """Extract content from PDF for hypothesis generation."""
         content = await self.pdf_processor.extract_text(pdf_bytes)
-        concepts = self.pdf_processor.extract_key_concepts(content, top_k=10)
+        concepts = await self.pdf_processor.extract_key_concepts(content, top_k=10)
         
         return {
             "title": title,

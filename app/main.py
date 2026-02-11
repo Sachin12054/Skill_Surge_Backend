@@ -29,16 +29,6 @@ logger = structlog.get_logger()
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
     logger.info("Starting Cognito Backend", version=settings.APP_VERSION)
-    
-    # Warm up ML models on startup to avoid cold start delays
-    try:
-        logger.info("Warming up Mamba model...")
-        from app.services.mamba_pdf_processor import MambaPDFProcessor
-        processor = MambaPDFProcessor()
-        logger.info("Model warming complete")
-    except Exception as e:
-        logger.error("Model warming failed", error=str(e))
-    
     yield
     logger.info("Shutting down Cognito Backend")
 

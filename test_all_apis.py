@@ -13,6 +13,7 @@ def test_endpoint(name, endpoint, method="GET", data=None):
     print(f"\n{'='*60}")
     print(f"Testing: {name}")
     print(f"Endpoint: {method} {endpoint}")
+    
     print(f"{'='*60}")
     
     try:

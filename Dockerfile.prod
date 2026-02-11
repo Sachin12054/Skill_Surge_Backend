@@ -1,51 +1,37 @@
-# Multi-stage build for production deployment with model caching
-# Stage 1: Model downloader
-FROM python:3.11-slim as model-downloader
-
-WORKDIR /models
-
-# Install minimal dependencies for model download
-RUN python3 -m pip install --no-cache-dir torch sentence-transformers
-
-# Pre-download the model
-RUN python3 -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2', cache_folder='/models')"
-
-# Stage 2: Production runtime
+# Lightweight production build (optimized for 512MB memory limit)
 FROM python:3.11-slim
 
 WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy pre-downloaded model from stage 1
-COPY --from=model-downloader /models /app/models
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libmagic1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies globally (not in user directory)
+# Install Python dependencies and clean up caches
 ENV PIP_USER=0
 RUN python3 -m pip install --upgrade pip && \
-    python3 -m pip install --no-cache-dir -r requirements.txt
+    python3 -m pip install --no-cache-dir -r requirements.txt && \
+    find /usr/local -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; true && \
+    find /usr/local -type d -name tests -exec rm -rf {} + 2>/dev/null; true && \
+    rm -rf /root/.cache/pip
 
-# Copy application code
-COPY . .
+# Copy only application code
+COPY ./app ./app
 
-# Set environment variables for model caching
-ENV TRANSFORMERS_CACHE=/app/models
-ENV HF_HOME=/app/models
-ENV SENTENCE_TRANSFORMERS_HOME=/app/models
+# Set environment variables
 ENV PYTHONUNBUFFERED=1
 
 # Expose port
 EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python3 -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
-# Run with uvicorn using python -m to avoid path issues
-CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run with minimal workers
+CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--limit-max-requests", "1000"]

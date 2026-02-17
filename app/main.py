@@ -1,10 +1,15 @@
+# Suppress warnings early (before other imports)
+import warnings
+warnings.filterwarnings("ignore", message="Core Pydantic V1 functionality")
+warnings.filterwarnings("ignore", category=UserWarning, module="langchain_core")
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import structlog
 from app.core.config import get_settings
-from app.api.routes import podcast, hypothesis, scribe, study, graph, memory, mock_interview, space, quiz, flashcards, study_timer, notes_scanner
+from app.api.routes import podcast, hypothesis, scribe, study, graph, memory, mock_interview, space, quiz, flashcards, study_timer, notes_scanner, chat
 
 settings = get_settings()
 
@@ -29,6 +34,18 @@ logger = structlog.get_logger()
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
     logger.info("Starting Cognito Backend", version=settings.APP_VERSION)
+    
+    # Optional: Warm up ML models on startup (disabled by default for faster startup)
+    # Uncomment if you have CUDA and required dependencies installed
+    # try:
+    #     logger.info("Warming up Mamba model...")
+    #     from app.services.mamba_pdf_processor import MambaPDFProcessor
+    #     processor = MambaPDFProcessor()
+    #     logger.info("Model warming complete")
+    # except Exception as e:
+    #     logger.warning("Model warming skipped", error=str(e))
+    
+    logger.info("Application startup complete")
     yield
     logger.info("Shutting down Cognito Backend")
 
@@ -97,6 +114,7 @@ app.include_router(quiz.router, prefix="/api/v1")
 app.include_router(flashcards.router, prefix="/api/v1")
 app.include_router(study_timer.router, prefix="/api/v1")
 app.include_router(notes_scanner.router, prefix="/api/v1")
+app.include_router(chat.router, prefix="/api/v1")
 
 # Import and register v2 hypothesis routes
 from app.api.routes import hypothesis_v2

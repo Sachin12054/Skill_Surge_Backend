@@ -57,9 +57,17 @@ sentence_transformers_cache/
 .pytest_cache/
 .coverage
 htmlcov/
+test_*.py
+*_test.py
+check_health.py
+run_server*.py
+test_stability.py
+test_chat_direct.py
+test_server.py
 
 # Jupyter
 .ipynb_checkpoints/
 
 # Docker
 .dockerignore
+credentials/gcp-service-account.json

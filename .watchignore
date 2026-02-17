@@ -1,0 +1,49 @@
+# Files and directories to ignore for auto-reload
+# This prevents unnecessary reloads and crashes
+
+# Test files
+test_*.py
+*_test.py
+
+# Documentation
+*.md
+*.txt
+DEPLOY_*.md
+RENDER_*.md
+TEST_*.md
+
+# Credentials and config
+credentials/
+.env
+.env.*
+
+# Build and cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Deployment
+deploy/
+migrations/
+docs/
+
+# Logs
+*.log
+
+# Scripts
+run_tests.ps1
+deploy-gcloud.ps1
+list_routes.py
+check_health.py

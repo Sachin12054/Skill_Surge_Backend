@@ -9,16 +9,16 @@ class Settings(BaseSettings):
     # App
     APP_NAME: str = "Cognito Backend"
     APP_VERSION: str = "1.0.0"
-    DEBUG: bool = False
+    DEBUG: bool = True
     
     # Server
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     
-    # Supabase
-    SUPABASE_URL: str
-    SUPABASE_KEY: str
-    SUPABASE_SERVICE_KEY: str
+    # Supabase (required for production, but with defaults for development)
+    SUPABASE_URL: str = "https://placeholder.supabase.co"
+    SUPABASE_KEY: str = "placeholder-key"
+    SUPABASE_SERVICE_KEY: str = "placeholder-service-key"
     
     # AWS
     AWS_REGION: str = "us-east-1"
@@ -29,26 +29,26 @@ class Settings(BaseSettings):
     BEDROCK_MODEL_ID: str = "anthropic.claude-3-5-sonnet-20240620-v1:0"
     BEDROCK_LLAMA_MODEL_ID: str = "meta.llama3-70b-instruct-v1:0"
     
-    # OpenAI
-    OPENAI_API_KEY: str
+    # OpenAI (required for AI features)
+    OPENAI_API_KEY: str = "placeholder-openai-key"
     
-    # Neo4j
+    # Neo4j (optional - for knowledge graph)
     NEO4J_URI: str = "bolt://localhost:7687"
     NEO4J_USER: str = "neo4j"
-    NEO4J_PASSWORD: str
+    NEO4J_PASSWORD: str = "password"
     
-    # ElevenLabs
+    # ElevenLabs (optional - for TTS)
     ELEVENLABS_API_KEY: str = ""
     ELEVENLABS_VOICE_1: str = "21m00Tcm4TlvDq8ikWAM"  # Rachel
     ELEVENLABS_VOICE_2: str = "AZnzlk1XvdvUeBnXmlld"  # Domi
     
-    # Sarvam AI
+    # Sarvam AI (optional - for translation)
     SARVAM_API_KEY: str = ""
     
-    # Tavus Video API
+    # Tavus Video API (optional)
     TAVUS_API_KEY: str = ""
     
-    # Google Cloud Vision API
+    # Google Cloud Vision API (optional)
     GOOGLE_APPLICATION_CREDENTIALS: str = "credentials/gcp-service-account.json"
     GCP_SERVICE_ACCOUNT_JSON: Optional[str] = None  # JSON string from env var (for cloud deploys)
     

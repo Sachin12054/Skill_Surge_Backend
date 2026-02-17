@@ -8,13 +8,15 @@ settings = get_settings()
 @lru_cache()
 def get_supabase_client() -> Client:
     """Get cached Supabase client."""
-    return create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+    supabase_url = settings.SUPABASE_URL.rstrip('/') + '/'
+    return create_client(supabase_url, settings.SUPABASE_KEY)
 
 
 @lru_cache()
 def get_supabase_admin_client() -> Client:
     """Get cached Supabase admin client with service key."""
-    return create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+    supabase_url = settings.SUPABASE_URL.rstrip('/') + '/'
+    return create_client(supabase_url, settings.SUPABASE_SERVICE_KEY)
 
 
 class SupabaseService:

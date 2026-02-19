@@ -4,6 +4,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 from app.core import get_supabase_service
 from app.api.deps import get_current_user
+from app.services.pdf_processor import PDFProcessor
 import uuid
 import json
 import random
@@ -124,15 +125,16 @@ async def extract_text_from_pdfs(pdf_ids: List[str], user_id: str) -> tuple[str,
                 subject_id = pdf["subject_id"]
             
             try:
-                # Download PDF content
-                content = supabase.download_file("course-materials", pdf["file_path"])
-                # For now, we'll use the filename as context
-                # In production, use PyPDF2 or similar to extract text
+                # Download PDF bytes from storage
+                pdf_bytes = supabase.download_file("course-materials", pdf["file_path"])
                 combined_text += f"\n\n--- Content from: {pdf['name']} ---\n"
-                # Placeholder: actual PDF text extraction would go here
-                combined_text += f"[PDF content from {pdf['name']}]"
+                # Extract actual text from PDF bytes
+                processor = PDFProcessor()
+                extracted = await processor.extract_text(pdf_bytes)
+                combined_text += extracted if extracted.strip() else f"[No extractable text in {pdf['name']}]"
             except Exception as e:
                 print(f"Error extracting PDF {pdf_id}: {e}")
+                combined_text += f"\n[Could not extract text from PDF: {pdf.get('name', pdf_id)}]\n"
     
     return combined_text, subject_id, subject_name
 
@@ -207,17 +209,31 @@ Generate exactly {config.num_questions} questions. Return ONLY valid JSON, no ot
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are an expert educational quiz generator. Return only valid JSON."},
+                {"role": "system", "content": "You are an expert educational quiz generator. Return only valid JSON array, no markdown, no code fences."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
             max_tokens=4096
         )
         
-        content = response.choices[0].message.content
+        ai_response = response.choices[0].message.content
+        
+        if not ai_response or not ai_response.strip():
+            print("AI generation error: Empty response from OpenAI")
+            return generate_fallback_questions(config)
+        
+        # Strip markdown code fences if present (e.g. ```json ... ```)
+        stripped = ai_response.strip()
+        if stripped.startswith("```"):
+            lines = stripped.split("\n")
+            # Remove first line (```json or ```) and last line (```)
+            lines = lines[1:] if lines[0].startswith("```") else lines
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            stripped = "\n".join(lines).strip()
         
         # Parse JSON from response
-        questions = json.loads(content)
+        questions = json.loads(stripped)
         
         # Add IDs to questions
         for q in questions:
@@ -225,6 +241,10 @@ Generate exactly {config.num_questions} questions. Return ONLY valid JSON, no ot
         
         return questions
         
+    except json.JSONDecodeError as e:
+        print(f"AI generation error (JSON parse): {e}")
+        print(f"Raw AI response was: {ai_response[:500] if 'ai_response' in dir() else 'N/A'}")
+        return generate_fallback_questions(config)
     except Exception as e:
         print(f"AI generation error: {e}")
         # Return fallback questions if AI fails

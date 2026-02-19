@@ -43,8 +43,8 @@ async def process_hypothesis(
             if result.data:
                 material = result.data[0]
                 
-                # Download PDF
-                pdf_bytes = await supabase.download_file(
+                # Download PDF (download_file is sync, no await)
+                pdf_bytes = supabase.download_file(
                     "course-materials",
                     material["file_path"]
                 )

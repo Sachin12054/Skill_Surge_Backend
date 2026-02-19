@@ -259,6 +259,7 @@ async def process_hypothesis_generation(
         
         session_data = {
             "id": session_id,
+            "task_id": task_id,
             "user_id": user_id,
             "paper_ids": all_paper_ids if all_paper_ids else [],
             "focus_area": focus_area,
@@ -274,14 +275,23 @@ async def process_hypothesis_generation(
         # Save to Supabase (use admin_client to bypass RLS in background task)
         try:
             logger.info(f"[{task_id}] Saving session to database: {session_id}")
-            logger.info(f"[{task_id}] Session data keys: {list(session_data.keys())}")
-            save_result = supabase.admin_client.table("hypothesis_sessions").insert(session_data).execute()
-            logger.info(f"[{task_id}] Session saved successfully: {session_id}, result: {save_result}")
+            try:
+                # Attempt with task_id column (requires migration 005 to be applied)
+                supabase.admin_client.table("hypothesis_sessions").insert(session_data).execute()
+                logger.info(f"[{task_id}] Session saved with task_id: {session_id}")
+            except Exception as col_err:
+                # PGRST204 = column not found; fall back to inserting without task_id
+                if "PGRST204" in str(col_err) or "task_id" in str(col_err):
+                    logger.warning(f"[{task_id}] task_id column missing in DB, saving without it. Run migration 005_hypothesis_task_id.sql.")
+                    session_data_no_task = {k: v for k, v in session_data.items() if k != "task_id"}
+                    supabase.admin_client.table("hypothesis_sessions").insert(session_data_no_task).execute()
+                    logger.info(f"[{task_id}] Session saved (without task_id): {session_id}")
+                else:
+                    raise
         except Exception as e:
             logger.error(f"[{task_id}] Error saving session: {e}")
             logger.error(f"[{task_id}] Traceback: {traceback.format_exc()}")
-            logger.error(f"[{task_id}] Session data types: user_id={type(user_id)}, paper_ids={type(all_paper_ids)}")
-            # Continue anyway, we have the results
+            # Continue anyway, we have the results in memory
         
         hypothesis_tasks[task_id]["status"] = "completed"
         hypothesis_tasks[task_id]["progress"] = 1.0
@@ -498,18 +508,47 @@ async def get_hypothesis_status(
     current_user: dict = Depends(get_current_user),
 ):
     """Get the status of a hypothesis generation task."""
-    if task_id not in hypothesis_tasks:
-        raise HTTPException(status_code=404, detail="Task not found")
-    
-    task = hypothesis_tasks[task_id]
-    
+    if task_id in hypothesis_tasks:
+        task = hypothesis_tasks[task_id]
+        return {
+            "task_id": task_id,
+            "status": task["status"],
+            "progress": task["progress"],
+            "current_step": task["current_step"],
+            "message": task.get("message"),
+            "error": task.get("error"),
+        }
+
+    # Not in memory — check if session was already saved to DB (e.g. after server restart)
+    try:
+        supabase = get_supabase_service()
+        db_result = supabase.admin_client.table("hypothesis_sessions") \
+            .select("id, status") \
+            .eq("task_id", task_id) \
+            .eq("user_id", current_user["id"]) \
+            .limit(1) \
+            .execute()
+        if db_result.data:
+            session = db_result.data[0]
+            return {
+                "task_id": task_id,
+                "status": session.get("status", "completed"),
+                "progress": 1.0,
+                "current_step": "done",
+                "message": "Session already completed. Fetch results via /result/{task_id}.",
+                "error": None,
+            }
+    except Exception as e:
+        logger.warning(f"DB lookup for task_id {task_id} failed: {e}")
+
+    # Task not found anywhere — return 'expired' so the frontend stops polling
     return {
         "task_id": task_id,
-        "status": task["status"],
-        "progress": task["progress"],
-        "current_step": task["current_step"],
-        "message": task.get("message"),
-        "error": task.get("error"),
+        "status": "expired",
+        "progress": 0.0,
+        "current_step": "not_found",
+        "message": "Task no longer available (server may have restarted). Please start a new generation.",
+        "error": None,
     }
 
 
@@ -520,7 +559,29 @@ async def get_hypothesis_result(
 ):
     """Get the result of hypothesis generation."""
     if task_id not in hypothesis_tasks:
-        raise HTTPException(status_code=404, detail="Task not found")
+        # Try to fetch the completed session from DB (covers server-restart case)
+        try:
+            supabase = get_supabase_service()
+            db_result = supabase.admin_client.table("hypothesis_sessions") \
+                .select("*") \
+                .eq("task_id", task_id) \
+                .eq("user_id", current_user["id"]) \
+                .limit(1) \
+                .execute()
+            if db_result.data:
+                session = db_result.data[0]
+                return {
+                    "success": True,
+                    "session_id": session["id"],
+                    "hypotheses": session.get("hypotheses", []),
+                    "research_gaps": session.get("research_gaps", []),
+                    "claims": session.get("claims", []),
+                    "citations": session.get("citations", []),
+                    "concepts": session.get("concepts", []),
+                }
+        except Exception as e:
+            logger.warning(f"DB result lookup for task_id {task_id} failed: {e}")
+        raise HTTPException(status_code=404, detail="Task not found and no saved session exists for this task")
     
     task = hypothesis_tasks[task_id]
     

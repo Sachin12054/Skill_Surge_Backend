@@ -3,6 +3,7 @@ from typing import List
 from app.core.config import get_settings
 import base64
 import io
+import wave
 # from pydub import AudioSegment  # Commented out - requires audioop not available in Python 3.13
 
 settings = get_settings()
@@ -95,32 +96,52 @@ class ElevenLabsService:
         return self._combine_audio(audio_segments)
     
     def _combine_audio(self, segments: List[bytes]) -> bytes:
-        """Combine multiple audio segments into one using pydub."""
+        """Combine multiple WAV audio segments into one using Python's built-in wave module."""
         if not segments:
             return b""
-        
+
         if len(segments) == 1:
             return segments[0]
-        
-        # TODO: Requires pydub with audioop support or Python < 3.13
-        # For now, return the first segment as fallback
-        # Full implementation requires: pip install pydub (Python 3.12) or alternative audio library
-        print("WARNING: Audio combining disabled - pydub requires audioop (Python 3.13 incompatible)")
-        return segments[0]
-        
-        # # Load first segment
-        # combined = AudioSegment.from_file(io.BytesIO(segments[0]), format="wav")
-        # 
-        # # Append remaining segments
-        # for segment_bytes in segments[1:]:
-        #     audio_segment = AudioSegment.from_file(io.BytesIO(segment_bytes), format="wav")
-        #     combined += audio_segment
-        # 
-        # # Export as MP3
-        # output_buffer = io.BytesIO()
-        # combined.export(output_buffer, format="mp3", bitrate="128k")
-        # output_buffer.seek(0)
-        # return output_buffer.read()
+
+        try:
+            output_buffer = io.BytesIO()
+            output_wav = None
+            combined_params = None
+
+            for segment_bytes in segments:
+                if not segment_bytes:
+                    continue
+                segment_io = io.BytesIO(segment_bytes)
+                try:
+                    with wave.open(segment_io, 'rb') as wav_in:
+                        params = wav_in.getparams()
+                        frames = wav_in.readframes(wav_in.getnframes())
+
+                        if output_wav is None:
+                            combined_params = params
+                            output_wav = wave.open(output_buffer, 'wb')
+                            output_wav.setparams(params)
+
+                        # Only append if sample format matches
+                        if params[:3] == combined_params[:3]:
+                            output_wav.writeframes(frames)
+                except wave.Error as we:
+                    print(f"Skipping non-WAV segment: {we}")
+                    continue
+
+            if output_wav:
+                output_wav.close()
+                output_buffer.seek(0)
+                result = output_buffer.read()
+                print(f"Combined {len(segments)} audio segments into {len(result)} bytes")
+                return result
+            else:
+                print("No valid WAV segments to combine, returning first segment")
+                return segments[0]
+
+        except Exception as e:
+            print(f"Error combining audio segments: {e}")
+            return segments[0]
     
     async def get_voices(self) -> List[dict]:
         """Get available voices."""

@@ -4,10 +4,10 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from app.core import get_supabase_service
 from app.api.deps import get_current_user
+from openai import OpenAI
 import uuid
 import json
 import math
-import boto3
 from app.core.config import get_settings
 
 router = APIRouter(prefix="/flashcards", tags=["Flashcards"])
@@ -122,35 +122,25 @@ def calculate_sm2(quality: int, repetitions: int, ease_factor: float, interval: 
 
 # ============ AI Flashcard Generation ============
 
-def get_bedrock_client():
-    """Get AWS Bedrock client."""
-    return boto3.client(
-        "bedrock-runtime",
-        region_name=settings.AWS_REGION,
-        aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-    )
-
-
 async def generate_flashcards_from_content(
     content: str,
     num_cards: int,
     difficulty: str,
     focus_topics: Optional[List[str]] = None
 ) -> List[Dict]:
-    """Generate flashcards using Claude AI."""
-    
+    """Generate flashcards using OpenAI GPT-4o-mini."""
+
     difficulty_instructions = {
         "easy": "basic definitions, simple facts, and key terms",
         "medium": "concepts requiring understanding, relationships between ideas",
         "hard": "application, analysis, and synthesis questions",
         "mixed": "a mix of easy (30%), medium (50%), and hard (20%) questions"
     }
-    
+
     topics_instruction = ""
     if focus_topics:
         topics_instruction = f"\nFocus especially on these topics: {', '.join(focus_topics)}"
-    
+
     prompt = f"""Based on the following study material, generate exactly {num_cards} high-quality flashcards.
 
 Difficulty level: {difficulty_instructions.get(difficulty, difficulty_instructions['mixed'])}
@@ -166,57 +156,61 @@ Each flashcard should have:
 - "hint": An optional hint to help recall (can be null)
 - "tags": 1-3 relevant topic tags
 
-Return ONLY a valid JSON array of flashcard objects. Example format:
+Return ONLY a valid JSON array of exactly {num_cards} flashcard objects. Example format:
 [
   {{"front": "What is photosynthesis?", "back": "The process by which plants convert sunlight, water, and CO2 into glucose and oxygen", "hint": "Think about what plants need to survive", "tags": ["biology", "plants"]}},
   ...
 ]
 
 Important:
-- Make questions specific and testable
+- Make questions specific and testable, drawn from the actual content above
 - Answers should be complete but concise
 - Avoid yes/no questions
-- Include key terms, formulas, and definitions
-- Generate exactly {num_cards} cards"""
+- Include key terms, formulas, and definitions from the material
+- Generate exactly {num_cards} cards — no more, no less"""
 
     try:
-        client = get_bedrock_client()
-        
-        response = client.invoke_model(
-            modelId=settings.BEDROCK_MODEL_ID,
-            body=json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 8000,
-                "temperature": 0.7,
-                "messages": [{"role": "user", "content": prompt}],
-                "system": "You are an expert educator creating flashcards. Always return valid JSON arrays only, no other text."
-            })
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an expert educator creating flashcards. Return only a valid JSON array, no markdown, no code fences."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=8000,
         )
-        
-        response_body = json.loads(response["body"].read())
-        result_text = response_body["content"][0]["text"]
-        
-        # Parse JSON from response
-        result_text = result_text.strip()
-        if result_text.startswith("```"):
-            result_text = result_text.split("```")[1]
-            if result_text.startswith("json"):
-                result_text = result_text[4:]
-        
-        flashcards = json.loads(result_text)
+
+        ai_response = response.choices[0].message.content
+
+        if not ai_response or not ai_response.strip():
+            raise ValueError("Empty response from OpenAI")
+
+        # Strip markdown code fences if present
+        stripped = ai_response.strip()
+        if stripped.startswith("```"):
+            lines = stripped.split("\n")
+            lines = lines[1:] if lines[0].startswith("```") else lines
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            stripped = "\n".join(lines).strip()
+
+        flashcards = json.loads(stripped)
+
+        if not isinstance(flashcards, list):
+            raise ValueError(f"Expected JSON array, got {type(flashcards)}")
+
+        print(f"Generated {len(flashcards)} flashcards from AI")
         return flashcards[:num_cards]
-        
+
+    except json.JSONDecodeError as e:
+        print(f"Flashcard JSON parse error: {e}")
+        print(f"Raw response: {ai_response[:500] if 'ai_response' in dir() else 'N/A'}")
+        raise
     except Exception as e:
-        print(f"Error generating flashcards: {e}")
-        # Return sample flashcards on error
-        return [
-            {
-                "front": "What is the main topic of this material?",
-                "back": "Review the uploaded content for key concepts",
-                "hint": "Check the introduction",
-                "tags": ["general"]
-            }
-        ]
+        print(f"Error generating flashcards with OpenAI: {e}")
+        raise
 
 
 # ============ Deck Endpoints ============
@@ -496,12 +490,17 @@ async def generate_flashcards(
                     combined_content += f"[Content from {pdf_result.data['name']}]"
     
     # Generate flashcards using AI
-    flashcards = await generate_flashcards_from_content(
-        combined_content,
-        data.num_cards,
-        data.difficulty,
-        data.focus_topics
-    )
+    try:
+        flashcards = await generate_flashcards_from_content(
+            combined_content,
+            data.num_cards,
+            data.difficulty,
+            data.focus_topics
+        )
+    except Exception as e:
+        # Clean up the empty deck before returning error
+        supabase.admin_client.table("flashcard_decks").delete().eq("id", deck_id).execute()
+        raise HTTPException(status_code=500, detail=f"AI flashcard generation failed: {str(e)}")
     
     # Insert flashcards into database
     created_cards = []
@@ -523,6 +522,11 @@ async def generate_flashcards(
             **card,
             "status": "new"
         })
+
+    # Update deck card count
+    supabase.admin_client.table("flashcard_decks").update({
+        "card_count": len(created_cards)
+    }).eq("id", deck_id).execute()
     
     return {
         "success": True,

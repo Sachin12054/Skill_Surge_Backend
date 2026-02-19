@@ -24,47 +24,56 @@ async def extract_content(state: PodcastState) -> PodcastState:
     """Extract and summarize content from PDF."""
     llm = get_openai_service()
     
-    prompt = f"""Analyze the following academic content and create a comprehensive summary 
-    that captures the key concepts, arguments, and insights. Focus on making it engaging 
-    and educational.
+    content = state['pdf_content']
+    # Use up to 150k chars (~100 pages) for the summary
+    content_excerpt = content[:150000]
+    estimated_pages = max(1, len(content) // 2000)  # rough: ~2000 chars per page
+    
+    prompt = f"""Analyze the following academic content ({estimated_pages} estimated pages) and create a comprehensive summary 
+    that captures ALL key concepts, arguments, theories, examples, and insights. Be thorough — do not skip topics.
     
     Content:
-    {state['pdf_content'][:50000]}  # Limit to avoid token limits
+    {content_excerpt}
     
-    Provide a detailed summary that would work well as the basis for an educational podcast episode."""
+    Provide a detailed, structured summary covering every major section. This will be used to generate a long-form podcast."""
     
     summary = await llm.invoke(
         prompt,
-        system_prompt="You are an expert academic content summarizer. Create engaging, educational summaries.",
-        max_tokens=4000,
+        system_prompt="You are an expert academic content summarizer. Create thorough, detailed summaries that cover all major topics.",
+        max_tokens=6000,
     )
     
-    return {**state, "summary": summary, "status": "summarized"}
+    # Store estimated page count in metadata for script length calculation
+    metadata = state.get('pdf_metadata', {})
+    metadata['estimated_pages'] = estimated_pages
+    
+    return {**state, "summary": summary, "pdf_metadata": metadata, "status": "summarized"}
 
 
 async def generate_script(state: PodcastState) -> PodcastState:
     """Generate a two-person podcast script from the summary."""
     llm = get_openai_service()
     
-    prompt = f"""Create an engaging two-person podcast script based on this academic summary.
+    prompt = f"""Create a concise but comprehensive two-person podcast script based on this academic summary.
     
     Summary:
     {state['summary']}
     
     Guidelines:
     - Create a natural conversation between two hosts: Alex (curious learner) and Sam (knowledgeable expert)
-    - Make it educational but entertaining
-    - Include relevant examples and analogies
-    - Break down complex concepts
-    - The script should be 5-10 minutes when read aloud
+    - COVER EVERY topic, concept, and section from the summary — nothing skipped
+    - Be dense and information-rich: each line should carry real content, no filler or padding
+    - Keep individual speaker turns short (1-2 sentences each) so the pace stays fast
+    - Use crisp analogies to explain complex ideas quickly
+    - Target 8-12 minutes total when read aloud, but prioritise full coverage over length
     - Format each line as JSON: {{"speaker": 1 or 2, "text": "dialogue"}}
     
     Return ONLY a JSON array of dialogue lines, no other text."""
     
     script_text = await llm.invoke(
         prompt,
-        system_prompt="You are a podcast scriptwriter. Create engaging educational dialogue.",
-        max_tokens=8000,
+        system_prompt="You are a podcast scriptwriter. Write tight, information-dense dialogue that covers all topics concisely — no waffle, no repetition.",
+        max_tokens=16000,
     )
     
     # Parse the script

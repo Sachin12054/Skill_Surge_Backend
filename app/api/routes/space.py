@@ -40,6 +40,10 @@ class AssignPDFRequest(BaseModel):
     subject_id: Optional[str]  # None to unassign
 
 
+class PDFUpdateRequest(BaseModel):
+    subject_id: Optional[str] = None  # None to unassign
+
+
 @router.get("/subjects")
 async def get_subjects(user: dict = Depends(get_current_user)):
     """Get all subjects for the current user."""
@@ -120,12 +124,107 @@ async def delete_subject(
     return {"success": True}
 
 
+@router.get("/subjects/{subject_id}/pdfs")
+async def get_subject_pdfs(
+    subject_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Get all PDFs assigned to a specific subject."""
+    supabase = get_supabase_service()
+
+    # Verify subject belongs to user
+    subject_result = supabase.admin_client.table("subjects").select(
+        "id, name, color, icon"
+    ).eq("id", subject_id).eq("user_id", user["id"]).execute()
+
+    if not subject_result.data:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    subject = subject_result.data[0]
+
+    pdfs_result = supabase.admin_client.table("space_pdfs").select("*").eq(
+        "subject_id", subject_id
+    ).eq("user_id", user["id"]).order("uploaded_at", desc=True).execute()
+
+    pdfs = [
+        {
+            "id": p["id"],
+            "name": p["name"],
+            "file_path": p["file_path"],
+            "file_size": p.get("file_size", 0),
+            "subject_id": subject_id,
+            "subject_name": subject["name"],
+            "subject_color": subject["color"],
+            "uploaded_at": p["uploaded_at"],
+        }
+        for p in (pdfs_result.data or [])
+    ]
+
+    return {
+        "subject": subject,
+        "pdfs": pdfs,
+        "pdf_count": len(pdfs),
+    }
+
+
+@router.post("/subjects/{subject_id}/pdfs/upload")
+async def upload_pdf_to_subject(
+    subject_id: str,
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+):
+    """Upload a PDF and immediately assign it to a subject."""
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+
+    supabase = get_supabase_service()
+
+    # Verify subject belongs to user
+    subject_result = supabase.admin_client.table("subjects").select(
+        "id, name, color"
+    ).eq("id", subject_id).eq("user_id", user["id"]).execute()
+
+    if not subject_result.data:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    subject = subject_result.data[0]
+
+    content = await file.read()
+    file_size = len(content)
+    pdf_id = str(uuid.uuid4())
+    storage_path = f"{user['id']}/space/{pdf_id}.pdf"
+
+    supabase.upload_file("course-materials", storage_path, content, "application/pdf")
+
+    now = datetime.utcnow().isoformat()
+    supabase.admin_client.table("space_pdfs").insert({
+        "id": pdf_id,
+        "user_id": user["id"],
+        "name": file.filename,
+        "file_path": storage_path,
+        "file_size": file_size,
+        "subject_id": subject_id,
+        "uploaded_at": now,
+    }).execute()
+
+    return {
+        "id": pdf_id,
+        "name": file.filename,
+        "file_path": storage_path,
+        "file_size": file_size,
+        "subject_id": subject_id,
+        "subject_name": subject["name"],
+        "subject_color": subject["color"],
+        "uploaded_at": now,
+    }
+
+
 @router.get("/pdfs")
 async def get_pdfs(
     subject_id: Optional[str] = None,
     user: dict = Depends(get_current_user),
 ):
-    """Get all PDFs, optionally filtered by subject."""
+    """Get all PDFs, optionally filtered by subject. Returns most recent first."""
     supabase = get_supabase_service()
     
     try:
@@ -139,7 +238,7 @@ async def get_pdfs(
             else:
                 query = query.eq("subject_id", subject_id)
         
-        result = query.order("name").execute()
+        result = query.order("uploaded_at", desc=True).execute()
         
         pdfs = []
         for p in result.data or []:
@@ -210,7 +309,7 @@ async def assign_pdfs(
     data: AssignPDFRequest,
     user: dict = Depends(get_current_user),
 ):
-    """Assign multiple PDFs to a subject."""
+    """Assign multiple PDFs to a subject (or unassign by passing subject_id=null)."""
     supabase = get_supabase_service()
     
     for pdf_id in data.pdf_ids:
@@ -219,6 +318,44 @@ async def assign_pdfs(
         }).eq("id", pdf_id).eq("user_id", user["id"]).execute()
     
     return {"success": True, "updated": len(data.pdf_ids)}
+
+
+@router.patch("/pdfs/{pdf_id}")
+async def update_pdf(
+    pdf_id: str,
+    data: PDFUpdateRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Update a PDF's subject assignment."""
+    supabase = get_supabase_service()
+
+    result = supabase.admin_client.table("space_pdfs").update({
+        "subject_id": data.subject_id
+    }).eq("id", pdf_id).eq("user_id", user["id"]).execute()
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="PDF not found")
+
+    pdf = result.data[0]
+    # Fetch subject name if assigned
+    subject_name = None
+    subject_color = None
+    if pdf.get("subject_id"):
+        sub = supabase.admin_client.table("subjects").select("name, color").eq(
+            "id", pdf["subject_id"]
+        ).single().execute()
+        if sub.data:
+            subject_name = sub.data["name"]
+            subject_color = sub.data["color"]
+
+    return {
+        "id": pdf_id,
+        "name": pdf["name"],
+        "subject_id": pdf.get("subject_id"),
+        "subject_name": subject_name,
+        "subject_color": subject_color,
+        "uploaded_at": pdf["uploaded_at"],
+    }
 
 
 @router.delete("/pdfs/{pdf_id}")

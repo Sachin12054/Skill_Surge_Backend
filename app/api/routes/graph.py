@@ -127,8 +127,8 @@ async def index_course_content(
     all_concepts = []
     
     for material in materials.data:
-        # Download and extract text
-        pdf_bytes = await supabase.download_file(
+        # Download and extract text (download_file is sync, no await)
+        pdf_bytes = supabase.download_file(
             "course-materials",
             material["file_path"]
         )

@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = "https://placeholder.supabase.co"
     SUPABASE_KEY: str = "placeholder-key"
     SUPABASE_SERVICE_KEY: str = "placeholder-service-key"
+    SUPABASE_JWT_SECRET: str = "placeholder-jwt-secret"  # Settings > API > JWT Secret
     
     # AWS
     AWS_REGION: str = "us-east-1"
